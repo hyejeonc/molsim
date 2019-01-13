@@ -1,0 +1,2 @@
+ARCH = LOCAL_GFORTRAN
+MPIFC = none

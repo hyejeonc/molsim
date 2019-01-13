@@ -1,0 +1,2 @@
+FFTW_PATH = /home/nicholc/.fftw/include
+FFTWLIB = /home/nicholc/.fftw/lib

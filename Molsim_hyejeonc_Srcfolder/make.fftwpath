@@ -1,0 +1,2 @@
+FFTW_PATH = /home/hyejeonc/Documents/ref/nicholc/.fftw/include
+FFTWLIB = /home/hyejeonc/Documents/ref/nicholc/.fftw/lib
