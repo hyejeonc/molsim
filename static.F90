@@ -39,7 +39,7 @@ subroutine StaticDriver(iStage)
    logical,       save :: lspdf, lrdf, lrdfchain, lrdfsph, lg3, lrdfcond, lsf,                  &
                           langdf, langextdf, loridipdf, lsphharaver, lradangdf,                 &
                           lkirkwoodgk, loripoldf, lnnhb, lnndf,                                 &
-                          lchaindf, lchaintypedf, lchaintypeextdf, lcbpc, lltt,                 &
+                          lchaindf, lchaintypedf, lchaintypeextdf, lcbpc, lltt, lltti, lltto,   &
                           lcluster, lzerosecondmoment, lmultipoledf,                            &
                           lenergydf, lwidom1, lwidom2, lmeanforce1, lmeanforce2, lpotmeanforce, &
                           lsurfacearea, lcrystalformat, ltrajectory, lsubstructuredf,           &
@@ -52,7 +52,7 @@ subroutine StaticDriver(iStage)
                         lspdf, lrdf, lrdfchain, lrdfsph, lg3, lrdfcond, lsf,                   &
                         langdf, langextdf, loridipdf, lsphharaver, lradangdf,                  &
                         lkirkwoodgk, loripoldf, lnnhb, lnndf,                                  &
-                        lchaindf, lchaintypedf, lchaintypeextdf, lcbpc, lltt,                  &
+                        lchaindf, lchaintypedf, lchaintypeextdf, lcbpc, lltt, lltti, lltto,    &
                         lcluster, lzerosecondmoment, lmultipoledf,                             &
                         lenergydf, lwidom1, lwidom2, lmeanforce1, lmeanforce2, lpotmeanforce,  &
                         lsurfacearea, lcrystalformat, ltrajectory, lsubstructuredf,            &
@@ -88,6 +88,8 @@ subroutine StaticDriver(iStage)
       lchaintypeextdf  = .false.
       lcbpc            = .false.
       lltt             = .false.
+      lltti            = .false.
+      lltto            = .false.
       lcluster         = .false.
       lzerosecondmoment= .false.
       lmultipoledf     = .false.
@@ -189,10 +191,12 @@ subroutine StaticDriver(iStage)
          if (lnnhb)             write(uout,'(a)') '   nnhb          '
          if (lnndf)             write(uout,'(a)') '   nndf          '
          if (lchaindf)          write(uout,'(a)') '   chaindf       '
-         if (lchaintypedf)      write(uout,'(a)') '   chaintypedf   '
+         if (lchaintypedf)      write(uout,'(a)') '   chaintypedf   ' 
          if (lchaintypeextdf)   write(uout,'(a)') '   chaintypedflab'
          if (lcbpc)             write(uout,'(a)') '   chainbead_part_contact'
          if (lltt)              write(uout,'(a)') '   ltt           '
+         if (lltti)             write(uout,'(a)') '   ltti          '
+         if (lltto)             write(uout,'(a)') '   ltto          '
          if (lcluster)          write(uout,'(a)') '   cluster       '
          if (lzerosecondmoment) write(uout,'(a)') '   zerosecondmoment'
          if (lmultipoledf)      write(uout,'(a)') '   multipoledf   '
@@ -246,6 +250,8 @@ subroutine StaticDriverSub
    if (lchaintypeextdf)   call ChainTypeExtDF(iStage)
    if (lcbpc)             call ChainBeadPartContact(iStage)
    if (lltt)              call LoopTailTrain(iStage)
+   if (lltti)             call LoopTailTrainIn(iStage)
+   if (lltto)             call LoopTailTrainOut(iStage) 
    if (lcluster)          call ClusterSD(iStage)
    if (lzerosecondmoment) call ZeroSecondMoment(iStage)
    if (lmultipoledf)      call MultipoleDF(iStage)
@@ -4916,7 +4922,7 @@ subroutine LoopTailTrain(iStage)
 
       call WriteHead(2, txheading, uout)
       write(uout,'(a,t40,a    )') 'adsorbing object               = ', adscond%txobject
-      if (adscond%txobject == 'plane_xy') &
+      if (adscond%txobject == 'plane_xy' .or. adscond%txobject == 'tube') &
       write(uout,'(a,t40,a    )') 'adsorbing surface              = ', adscond%txsurface
       write(uout,'(a,t35,f10.3)') 'adsorbing distance             = ', adscond%dist
       do ict = 1, nct
@@ -4935,6 +4941,333 @@ subroutine LoopTailTrain(iStage)
    if (ltime) call CpuAdd('stop', txroutine, 1, uout)
 
 end subroutine LoopTailTrain
+
+!************************************************************************
+!*                                                                      *
+!*     LoopTailTrainIn                                                  *
+!*                                                                      *
+!************************************************************************
+
+! ... calculate loop, tail, and tail characteristics for chains of inner surface ... by Hye
+
+!     type  label
+!     ----  -----
+!     1     number of loops
+!     2     number of tails
+!     3     number of trains
+!     4     length of loops
+!     5     length of tails
+!     6     length of trains
+!     7     number of segments in loops
+!     8     number of segments in tails
+!     9     number of segments in trains
+!     10    number of adsorbed chains
+!     11    number of adsorbed segments
+
+subroutine LoopTailTrainIn(iStage)
+
+   use MolModule
+   implicit none
+
+   integer(4), intent(in) :: iStage
+
+   character(40), parameter :: txroutine ='LoopTailTrainIn'
+   character(80), parameter :: txheading ='loop, tail, and train characteristics of inner surface'
+   integer(4)   , parameter :: ntype = 11
+   integer(4)   , parameter :: mnobj = 100
+   type(adscond_var),             save :: adscond
+   integer(4)      ,              save :: nvar
+   type(scalar_var), allocatable, save :: var(:)
+   integer(4),       allocatable, save :: nadschain(:), nadsseg(:)
+
+   logical    :: ladschain                           ! .true. if chain is adsorbed
+   logical,          allocatable, save :: ladsseg(:) ! .true. if segment is adsorbed
+   integer(4) :: nobj(3)                             ! number of objects
+   integer(4) :: lenobj(3,mnobj)                     ! length of objects
+   integer(4) :: nsegobj(3)                          ! number of segments involved
+   integer(4) :: ic, ict, i, ioffset, iobj
+
+   namelist /nmlLoopTailTrainIn/ adscond
+
+   if (slave) return                   ! only master
+
+   if (ltrace) call WriteTrace(2, txroutine, iStage)
+
+   if (ltime) call CpuAdd('start', txroutine, 1, uout)
+
+   select case (iStage)
+   case (iReadInput)
+
+      rewind(uin)
+      read(uin,nmlLoopTailTrainIn)
+
+      call LowerCase(adscond%txobject)
+      call LowerCase(adscond%txsurface)
+
+      if (.not.allocated(ladsseg)) then
+         allocate(ladsseg(maxval(npct(1:nct))))
+         ladsseg = .false.
+      end if
+
+! ... set nvar as well as allocate memory
+
+      nvar = nct*ntype
+      allocate(var(nvar), nadschain(nct), nadsseg(nct))
+      nadschain = 0
+      nadsseg = 0
+
+! ... set label
+
+      do ict = 1, nct
+         ioffset = ntype*(ict-1)                                     ! offset for different chain types
+         var(1+ioffset )%label = 'number of loops                = '
+         var(2+ioffset )%label = 'number of tails                = '
+         var(3+ioffset )%label = 'number of trains               = '
+         var(4+ioffset )%label = 'length of loops                = '
+         var(5+ioffset )%label = 'length of tails                = '
+         var(6+ioffset )%label = 'length of trains               = '
+         var(7+ioffset )%label = 'number of segments in loops    = '
+         var(8+ioffset )%label = 'number of segments in tails    = '
+         var(9+ioffset )%label = 'number of segments in trains   = '
+         var(10+ioffset)%label = 'number of adsorbed chains      = '
+         var(11+ioffset)%label = 'number of adsorbed segments    = '
+      end do
+
+   case (iBeforeSimulation)
+
+      call ScalarSample(iStage, 1, nvar, var)
+      if (lsim .and. master .and. (txstart == 'continue')) read(ucnf) var
+
+   case (iBeforeMacrostep)
+
+      call ScalarSample(iStage, 1, nvar, var)
+
+   case (iSimulationStep)
+
+      nadsseg = 0
+      nadschain = 0
+      do ic = 1, nc                                                      ! loop over chains
+         ict = ictcn(ic)
+         ioffset = ntype*(ict-1)
+         call CheckAdsChainSeg(ic, adscond, ladschain, ladsseg)
+         if (ladschain) then
+            call CalcLTT(npct(ict),ladsseg,mnobj,nobj,lenobj,nsegobj)    ! calculate nobj, lenobj, and nsegobj
+            do i = 1, 3                                                  ! loop over the different characteristics
+               var(i+ioffset)%value = nobj(i)                            ! assign number of objects
+               call ScalarSample(iStage, i+ioffset, i+ioffset, var)
+               do iobj = 1, nobj(i)
+                  var(i+3+ioffset)%value = lenobj(i,iobj)                ! assign the lengths of the objects
+                  call ScalarSample(iStage, i+3+ioffset, i+3+ioffset, var)
+               end do
+               var(i+6+ioffset)%value = nsegobj(i)                       ! assign the total number of segments in these objects
+               call ScalarSample(iStage, i+6+ioffset, i+6+ioffset, var)
+            end do
+            nadschain(ict) = nadschain(ict) + 1
+            nadsseg(ict) = nadsseg(ict) + nsegobj(3)
+         end if
+      end do
+      do ict = 1, nct
+         ioffset = ntype*(ict-1)
+         var(10+ioffset)%value = nadschain(ict)
+         call ScalarSample(iStage, 10+ioffset, 10+ioffset, var)
+         var(11+ioffset)%value = nadsseg(ict)
+         if (nadsseg(ict) > 0) call ScalarSample(iStage, 11+ioffset, 11+ioffset, var)
+      end do
+
+   case (iAfterMacrostep)
+
+      call ScalarSample(iStage, 1, nvar, var)
+      if (lsim .and. master) write(ucnf) var
+
+   case (iAfterSimulation)
+
+      call ScalarSample(iStage, 1, nvar, var)
+
+      call WriteHead(2, txheading, uout)
+      write(uout,'(a,t40,a    )') 'adsorbing object               = ', adscond%txobject
+      if (adscond%txobject == 'plane_xy' .or. adscond%txobject == 'tube') &
+      write(uout,'(a,t40,a    )') 'adsorbing surface              = ', adscond%txsurface
+      write(uout,'(a,t35,f10.3)') 'adsorbing distance             = ', adscond%dist
+      do ict = 1, nct
+         ioffset = ntype*(ict-1)
+         write(uout,'()')
+         if (nct > 1) write(uout,'(2a)') 'chain: ', txct(ict)
+         if (nct > 1) write(uout,'(a)')  '------------------'
+         call ScalarWrite(iStage, 1+ioffset, ntype+ioffset, var, 1, '(a,t35,4f15.3,f15.0)', uout)
+      end do
+
+      deallocate(var)
+      deallocate(ladsseg)
+
+   end select
+
+   if (ltime) call CpuAdd('stop', txroutine, 1, uout)
+
+end subroutine LoopTailTrainIn
+
+!************************************************************************
+!*                                                                      *
+!*     LoopTailTrainOut                                                 *
+!*                                                                      *
+!************************************************************************
+
+! ... calculate loop, tail, and tail characteristics for chains of outer surface ... by Hye
+
+!     type  label
+!     ----  -----
+!     1     number of loops
+!     2     number of tails
+!     3     number of trains
+!     4     length of loops
+!     5     length of tails
+!     6     length of trains
+!     7     number of segments in loops
+!     8     number of segments in tails
+!     9     number of segments in trains
+!     10    number of adsorbed chains
+!     11    number of adsorbed segments
+
+subroutine LoopTailTrainOut(iStage)
+
+   use MolModule
+   implicit none
+
+   integer(4), intent(in) :: iStage
+
+   character(40), parameter :: txroutine ='LoopTailTrainOut'
+   character(80), parameter :: txheading ='loop, tail, and train characteristics'
+   integer(4)   , parameter :: ntype = 11
+   integer(4)   , parameter :: mnobj = 100
+   type(adscond_var),             save :: adscond
+   integer(4)      ,              save :: nvar
+   type(scalar_var), allocatable, save :: var(:)
+   integer(4),       allocatable, save :: nadschain(:), nadsseg(:)
+
+   logical    :: ladschain                           ! .true. if chain is adsorbed
+   logical,          allocatable, save :: ladsseg(:) ! .true. if segment is adsorbed
+   integer(4) :: nobj(3)                             ! number of objects
+   integer(4) :: lenobj(3,mnobj)                     ! length of objects
+   integer(4) :: nsegobj(3)                          ! number of segments involved
+   integer(4) :: ic, ict, i, ioffset, iobj
+
+   namelist /nmlLoopTailTrainOut/ adscond
+
+   if (slave) return                   ! only master
+
+   if (ltrace) call WriteTrace(2, txroutine, iStage)
+
+   if (ltime) call CpuAdd('start', txroutine, 1, uout)
+
+   select case (iStage)
+   case (iReadInput)
+
+      rewind(uin)
+      read(uin,nmlLoopTailTrainOut)
+
+      call LowerCase(adscond%txobject)
+      call LowerCase(adscond%txsurface)
+
+      if (.not.allocated(ladsseg)) then
+         allocate(ladsseg(maxval(npct(1:nct))))
+         ladsseg = .false.
+      end if
+
+! ... set nvar as well as allocate memory
+
+      nvar = nct*ntype
+      allocate(var(nvar), nadschain(nct), nadsseg(nct))
+      nadschain = 0
+      nadsseg = 0
+
+! ... set label
+
+      do ict = 1, nct
+         ioffset = ntype*(ict-1)                                     ! offset for different chain types
+         var(1+ioffset )%label = 'number of loops                = '
+         var(2+ioffset )%label = 'number of tails                = '
+         var(3+ioffset )%label = 'number of trains               = '
+         var(4+ioffset )%label = 'length of loops                = '
+         var(5+ioffset )%label = 'length of tails                = '
+         var(6+ioffset )%label = 'length of trains               = '
+         var(7+ioffset )%label = 'number of segments in loops    = '
+         var(8+ioffset )%label = 'number of segments in tails    = '
+         var(9+ioffset )%label = 'number of segments in trains   = '
+         var(10+ioffset)%label = 'number of adsorbed chains      = '
+         var(11+ioffset)%label = 'number of adsorbed segments    = '
+      end do
+
+   case (iBeforeSimulation)
+
+      call ScalarSample(iStage, 1, nvar, var)
+      if (lsim .and. master .and. (txstart == 'continue')) read(ucnf) var
+
+   case (iBeforeMacrostep)
+
+      call ScalarSample(iStage, 1, nvar, var)
+
+   case (iSimulationStep)
+
+      nadsseg = 0
+      nadschain = 0
+      do ic = 1, nc                                                      ! loop over chains
+         ict = ictcn(ic)
+         ioffset = ntype*(ict-1)
+         call CheckAdsChainSeg(ic, adscond, ladschain, ladsseg)
+         if (ladschain) then
+            call CalcLTT(npct(ict), ladsseg, mnobj, nobj, lenobj, nsegobj)    ! calculate nobj, lenobj, and nsegobj
+            do i = 1, 3                                                  ! loop over the different characteristics
+               var(i+ioffset)%value = nobj(i)                            ! assign number of objects
+               call ScalarSample(iStage, i+ioffset, i+ioffset, var)
+               do iobj = 1, nobj(i)
+                  var(i+3+ioffset)%value = lenobj(i,iobj)                ! assign the lengths of the objects
+                  call ScalarSample(iStage, i+3+ioffset, i+3+ioffset, var)
+               end do
+               var(i+6+ioffset)%value = nsegobj(i)                       ! assign the total number of segments in these objects
+               call ScalarSample(iStage, i+6+ioffset, i+6+ioffset, var)
+            end do
+            nadschain(ict) = nadschain(ict) + 1
+            nadsseg(ict) = nadsseg(ict) + nsegobj(3)
+         end if
+      end do
+      do ict = 1, nct
+         ioffset = ntype*(ict-1)
+         var(10+ioffset)%value = nadschain(ict)
+         call ScalarSample(iStage, 10+ioffset, 10+ioffset, var)
+         var(11+ioffset)%value = nadsseg(ict)
+         if (nadsseg(ict) > 0) call ScalarSample(iStage, 11+ioffset, 11+ioffset, var)
+      end do
+
+   case (iAfterMacrostep)
+
+      call ScalarSample(iStage, 1, nvar, var)
+      if (lsim .and. master) write(ucnf) var
+
+   case (iAfterSimulation)
+
+      call ScalarSample(iStage, 1, nvar, var)
+
+      call WriteHead(2, txheading, uout)
+      write(uout,'(a,t40,a    )') 'adsorbing object               = ', adscond%txobject
+      if (adscond%txobject == 'plane_xy' .or. adscond%txobject == 'tube') &
+      write(uout,'(a,t40,a    )') 'adsorbing surface              = ', adscond%txsurface
+      write(uout,'(a,t35,f10.3)') 'adsorbing distance             = ', adscond%dist
+      do ict = 1, nct
+         ioffset = ntype*(ict-1)
+         write(uout,'()')
+         if (nct > 1) write(uout,'(2a)') 'chain: ', txct(ict)
+         if (nct > 1) write(uout,'(a)')  '------------------'
+         call ScalarWrite(iStage, 1+ioffset, ntype+ioffset, var, 1, '(a,t35,4f15.3,f15.0)', uout)
+      end do
+
+      deallocate(var)
+      deallocate(ladsseg)
+
+   end select
+
+   if (ltime) call CpuAdd('stop', txroutine, 1, uout)
+
+end subroutine LoopTailTrainOut
+
 
 !************************************************************************
 !*                                                                      *
@@ -4974,6 +5307,7 @@ subroutine CheckAdsChainSeg(ic, adscond, ladschain, ladsseg)
             call Stop('CheckAdsChainSeg', 'error in adscond%txsurface', uout)
          end if
       end do
+
    else if (adscond%txobject(1:4) == 'part') then
       txno = adscond%txobject(6:8)
       read(txno,'(i3)') jp                    ! jp is the id of the "adsorbing" particle
@@ -4986,32 +5320,48 @@ subroutine CheckAdsChainSeg(ic, adscond, ladschain, ladsseg)
          call PBCr2(dx,dy,dz,r2)
          if (r2 < dist2) ladsseg(iseg) = .true.
       end do
-   else if (adscond%txobject == 'tubeout') then
-!      txno = adscond%txobject(6:8)
-!      read(txno,'(i3)') jp                    ! jp is the id of the "adsorbing" particle
+
+   else if (adscond%txobject == 'tube') then
+!      txno = adscond%txobject(6:8)                                ! ip is the id of the chain, 
+!      read(txno,'(i3)') jp                    ! jp is the id of the "adsorbing" particle, it does not need here. 
       dist2 = adscond%dist**2
-print*, 'dist, dist**2', adscond%dist, adscond%dist**2 
-      do iseg = 1, npchain                    ! loop over segments, check if segment is adsorbed at jp
-         ip = ipnsegcn(iseg,ic)
-         r2=ro(1,ip)**2+ro(2,ip)**2
-print*, 'r**2 & (d+r+dist)**2', r2, (dcap+rcap+adscond%dist)**2
-            if (((dcap+rcap-adscond%dist)**2 > r2) .or. (r2 > (dcap+rcap+adscond%dist)**2)) cycle
-print*, 'd+c, r2, (d+r-dist)**2 ,(d+r+dist)**2', (dcap+rcap)**2, r2,(dcap+rcap-adscond%dist)**2 ,(dcap+rcap+adscond%dist)**2 
-              if((ro(3,ip) > (-lcap/2.0-adscond%dist)) .and. (ro(3,ip) < (lcap/2.0 + adscond%dist))) then
-                  ladsseg(iseg) = .true.
-print*, 'polymer(iseg), t/f', iseg, ladsseg(iseg)               
-            end if
-      end do
+ 
+      if (adscond%txsurface == '+') then      
+            do iseg = 1, npchain                    ! loop over segments, check if segment is adsorbed at jp
+            ip = ipnsegcn(iseg,ic)
+            r2=ro(1,ip)**2+ro(2,ip)**2
+               if (((dcap + rcap + adscond%dist)**2 < r2) .or. (r2 < (dcap + rcap)**2)) cycle
+                if((ro(3,ip) > (-lcap/2.0-adscond%dist)) .and. (ro(3,ip) < (lcap/2.0 + adscond%dist))) then
+                     ladsseg(iseg) = .true.          
+               end if
+            end do
+
+      else if (adscond%txsurface == '-') then      
+            do iseg = 1, npchain                    ! loop over segments, check if segment is adsorbed at jp
+            ip = ipnsegcn(iseg,ic)
+            r2=ro(1,ip)**2+ro(2,ip)**2
+               if ((rcap**2 < r2) .or. (r2 < (rcap - adscond%dist)**2)) cycle
+                if((ro(3,ip) > (-lcap/2.0-adscond%dist)) .and. (ro(3,ip) < (lcap/2.0 + adscond%dist))) then
+                     ladsseg(iseg) = .true.       
+               end if
+            end do
+
+      else if (adscond%txsurface == '-|+') then      
+            do iseg = 1, npchain                    ! loop over segments, check if segment is adsorbed at jp
+            ip = ipnsegcn(iseg,ic)
+            r2=ro(1,ip)**2+ro(2,ip)**2
+               if (((rcap + dcap + adscond%dist)**2 < r2) .or. (r2 < (rcap - adscond%dist)**2)) cycle
+                if((ro(3,ip) > (-lcap/2.0-adscond%dist)) .and. (ro(3,ip) < (lcap/2.0 + adscond%dist))) then
+                     ladsseg(iseg) = .true.              
+               end if
+            end do
+      end if
    end if
 
    ladschain = .false.
    if (count(ladsseg(1:npchain)) > 0) ladschain = .true. ! check if chain is adsorbed
 
 end subroutine CheckAdsChainSeg
-
-
-
-
 
 !************************************************************************
 !*                                                                      *

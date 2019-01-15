@@ -3005,6 +3005,8 @@ subroutine StaticUser(iStage)
       if (txuser == 'scalardemo') call ScalarDemo2(iStage, uout)
       if (txuser(1:6) == 'jasper') call BondOrder(iStage)
       if (txuser == 'anna') call ChainBeadCylContact(iStage)
+      if (txuser == 'nanotube') call ChainBeadInOutTubeCont(iStage)
+      if (txuser == 'nanotube') call ChainBeadInTubeCont(iStage)
       if (txuser == 'nanotube') call ChainBeadOutTubeCont(iStage)
 
       if (txuser(1:4) == 'comp') call DoComplexation(iStage)
@@ -3166,21 +3168,25 @@ end subroutine StaticUser
       var%nsamp2 = var%nsamp2 + 1
 
 
-!print*,'rcap+dcap, r+d**2, r+d+c**2 ', rcap+dcap, (rcap+dcap)**2, (rcap+dcap+rcontact)**2
+
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
       do ic = 1, nc
          ict = ictcn(ic)
          do iseg = 1, npct(ict)
             ip = ipnsegcn(iseg,ic)
                r2 = ro(1,ip)**2 + ro(2,ip)**2
-!print*,'ic, ict, ip, r2', ic, ict, ip, r2
-               if (((dcap+rcap-rcontact)**2 > r2) .or. (r2 > (dcap+rcap+rcontact)**2)) cycle
+print*,'ic, ict, ip, r2', ic, ict, ip, r2
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+               if (((dcap+rcap)**2 > r2) .or. (r2 > (dcap+rcap+rcontact)**2)) cycle
+print*,'#############this bead is in range of plane axis############'
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
                  if ((ro(3,ip) > (-cyllen/2.0 - rcontact)) .and. (ro(3,ip) < (cyllen/2.0 + rcontact))) then 
-!print*,'##########################'
-!print*,'iseg, ic, ip, r2', iseg, ip, r2
- 
+print*,'#############this bead is absorbed outside surface############'
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+print*,'iseg, ic, ict, ip, r2', iseg, ic, ict, ip, r2 
                      ivar = ipnt(ic,1)
                      ibin = iseg-1
-!print*,'ivar, ipnt(ic,1)', ivar, ipnt(ic,1)
+print*,'ivar, ipnt(ic,1)', ivar, ipnt(ic,1)
                   var(ivar)%avs2(ibin) = var(ivar)%avs2(ibin) + One
                end if
          end do
@@ -3212,6 +3218,272 @@ end subroutine StaticUser
    if (ltime) call CpuAdd('stop', txroutine, 1, uout)
 
 end subroutine ChainBeadOutTubeCont
+
+
+!************************************************************************
+!*                                                                      *
+!*     ChainBeadInTubeCont                                             *
+!*                                                                      *
+!************************************************************************
+
+! ... calculate probability of chain bead contact to the inner surface of a tube - Hye
+
+   subroutine ChainBeadInTubeCont(iStage)
+
+   use MolModule
+   implicit none
+
+   integer(4), intent(in) :: iStage
+
+   character(40), parameter :: txroutine ='ChainBeadInTubeCont'
+   character(80), parameter :: txheading ='probability of chain bead-inner tube contact'
+   integer(4)   , parameter :: ntype = 10
+   integer(4),                 save :: nbin
+   integer(4),                 save :: nvar
+   real(8),                    save :: rcontact
+   type(df_var), allocatable,  save :: var(:)
+   integer(4),   allocatable,  save :: ipnt(:,:)
+   integer(4) :: iseg, ic, ict, ip, ivar, ibin
+   real(8) ::  r2
+   character(6) :: str1
+
+   namelist /nmlCBITC/ rcontact
+
+   if (slave) return                   ! only master
+
+   if (ltrace) call WriteTrace(2, txroutine, iStage)
+
+   if (ltime) call CpuAdd('start', txroutine, 1, uout)
+
+   select case (iStage)
+   case (iReadInput)
+
+      rewind(uin)
+      read(uin,nmlCBITC)
+
+      if (nct > 1) call Stop(txroutine, 'nct > 1', uout)
+
+   case (iWriteInput)
+
+      nbin = npct(1)
+      if (nbin > mnbin_df) call Stop(txroutine, 'nbin > mnbin_df', uout)
+
+! ... set nvar as well as allocate memory
+
+      nvar = nc
+      allocate(var(nvar), ipnt(nc, ntype))
+      ipnt = 0
+
+! ... set ipnt, label, min, max, and nbin
+
+      ivar = 0
+      do ic = 1, nc                         ! loop over all chains
+         ict = ictcn(ic)
+         ivar = ivar+1
+         ipnt(ic,1) = ivar
+         write(str1,'(i6)') ic
+         var(ivar)%label = 'c.'//trim(adjustl(str1))
+         var(ivar)%min = 1-0.5
+         var(ivar)%max = npct(ict)+0.5
+         var(ivar)%nbin = nbin
+      end do
+      call DistFuncSample(iStage, nvar, var)
+
+   case (iBeforeSimulation)
+
+      call DistFuncSample(iStage, nvar, var)
+      if (lsim .and. master .and. (txstart == 'continue')) read(ucnf) var
+
+   case (iBeforeMacrostep)
+
+      call DistFuncSample(iStage, nvar, var)
+
+   case (iSimulationStep)
+
+      var%nsamp2 = var%nsamp2 + 1
+
+print*, 'start for CBITC'
+
+      do ic = 1, nc
+         ict = ictcn(ic)
+         do iseg = 1, npct(ict)
+            ip = ipnsegcn(iseg,ic)
+               r2 = ro(1,ip)**2 + ro(2,ip)**2
+print*,'(rcap-rcontact)**2, r**2', (rcap-rcontact)**2, r2
+print*,'ic, ict, ip, r2', ic, ict, ip, r2
+               if (((rcap-rcontact)**2 > r2) .or. (r2 > rcap**2)) cycle
+print*,'#############this bead is in range of plane axis############'
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+                 if ((ro(3,ip) > (-cyllen/2.0 - rcontact)) .and. (ro(3,ip) < (cyllen/2.0 + rcontact))) then 
+print*,'###########Now this bead is absordbed inside!#####'
+print*,'iseg, ic, ict, ip, r2', iseg, ic, ict, ip, r2 
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+                     ivar = ipnt(ic,1)
+                     ibin = iseg-1
+print*,'ivar, ipnt(ic,1)', ivar, ipnt(ic,1)
+                  var(ivar)%avs2(ibin) = var(ivar)%avs2(ibin) + One
+               end if
+         end do
+      end do
+
+   case (iAfterMacrostep)
+
+      call DistFuncSample(iStage, nvar, var)
+      if (lsim .and. master) write(ucnf) var
+
+   case (iAfterSimulation)
+
+    write(*,*) '1'
+      call DistFuncSample(iStage, nvar, var)
+    write(*,*) '2'
+      call WriteHead(2, txheading, uout)
+    write(*,*) '3'
+      write(uout,'(a,t35,f8.2)') 'upper contact distance         = ', rcontact
+      call DistFuncHead(nvar, var, uout)
+    write(*,*) '4'
+      call DistFuncWrite(txheading, nvar, var, uout, ulist, ishow, iplot, ilist)
+    write(*,*) '5'
+
+     deallocate(var, ipnt)
+    write(*,*) '6'
+
+   end select
+
+   if (ltime) call CpuAdd('stop', txroutine, 1, uout)
+
+end subroutine ChainBeadInTubeCont
+
+
+!************************************************************************
+!*                                                                      *
+!*     ChainBeadInOutTubeCont                                             *
+!*                                                                      *
+!************************************************************************
+
+! ... calculate probability of chain bead contact to the inner or outer surface of a tube - Hye
+
+   subroutine ChainBeadInOutTubeCont(iStage)
+
+   use MolModule
+   implicit none
+
+   integer(4), intent(in) :: iStage
+
+   character(40), parameter :: txroutine ='ChainBeadInOutTubeCont'
+   character(80), parameter :: txheading ='probability of chain bead-inner/outer tube cont'
+   integer(4)   , parameter :: ntype = 10
+   integer(4),                 save :: nbin
+   integer(4),                 save :: nvar
+   real(8),                    save :: rcontact
+   type(df_var), allocatable,  save :: var(:)
+   integer(4),   allocatable,  save :: ipnt(:,:)
+   integer(4) :: iseg, ic, ict, ip, ivar, ibin
+   real(8) ::  r2
+   character(6) :: str1
+
+   namelist /nmlCBIOTC/ rcontact
+
+   if (slave) return                   ! only master
+
+   if (ltrace) call WriteTrace(2, txroutine, iStage)
+
+   if (ltime) call CpuAdd('start', txroutine, 1, uout)
+
+   select case (iStage)
+   case (iReadInput)
+
+      rewind(uin)
+      read(uin,nmlCBIOTC)
+
+      if (nct > 1) call Stop(txroutine, 'nct > 1', uout)
+
+   case (iWriteInput)
+
+      nbin = npct(1)
+      if (nbin > mnbin_df) call Stop(txroutine, 'nbin > mnbin_df', uout)
+
+! ... set nvar as well as allocate memory
+
+      nvar = nc
+      allocate(var(nvar), ipnt(nc, ntype))
+      ipnt = 0
+
+! ... set ipnt, label, min, max, and nbin
+
+      ivar = 0
+      do ic = 1, nc                         ! loop over all chains
+         ict = ictcn(ic)
+         ivar = ivar+1
+         ipnt(ic,1) = ivar
+         write(str1,'(i6)') ic
+         var(ivar)%label = 'c.'//trim(adjustl(str1))
+         var(ivar)%min = 1-0.5
+         var(ivar)%max = npct(ict)+0.5
+         var(ivar)%nbin = nbin
+      end do
+      call DistFuncSample(iStage, nvar, var)
+
+   case (iBeforeSimulation)
+
+      call DistFuncSample(iStage, nvar, var)
+      if (lsim .and. master .and. (txstart == 'continue')) read(ucnf) var
+
+   case (iBeforeMacrostep)
+
+      call DistFuncSample(iStage, nvar, var)
+
+   case (iSimulationStep)
+
+      var%nsamp2 = var%nsamp2 + 1
+
+      do ic = 1, nc
+         ict = ictcn(ic)
+         do iseg = 1, npct(ict)
+            ip = ipnsegcn(iseg,ic)
+               r2 = ro(1,ip)**2 + ro(2,ip)**2
+print*,'ic, ict, ip, r2', ic, ict, ip, r2
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+               if (((rcap-rcontact)**2 > r2) .or. (r2 > (dcap+rcap+rcontact)**2)) cycle
+print*,'#############this bead is in range of plane axis############'
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+                 if ((ro(3,ip) > (-cyllen/2.0 - rcontact)) .and. (ro(3,ip) < (cyllen/2.0 + rcontact))) then 
+print*,'#############this bead is absorbed inside or outside############'
+print*,'iseg, ic, ict, ip, r2', iseg, ic, ict, ip, r2
+print*,'rcap-rcontact, r, rcap+dcap+rcontact', (rcap-rcontact)**2, r2, (rcap+dcap+rcontact)**2
+                     ivar = ipnt(ic,1)
+                     ibin = iseg-1
+print*,'ivar, ipnt(ic,1)', ivar, ipnt(ic,1)
+                  var(ivar)%avs2(ibin) = var(ivar)%avs2(ibin) + One
+               end if
+         end do
+      end do
+
+   case (iAfterMacrostep)
+
+      call DistFuncSample(iStage, nvar, var)
+      if (lsim .and. master) write(ucnf) var
+
+   case (iAfterSimulation)
+
+    write(*,*) '1'
+      call DistFuncSample(iStage, nvar, var)
+    write(*,*) '2'
+      call WriteHead(2, txheading, uout)
+    write(*,*) '3'
+      write(uout,'(a,t35,f8.2)') 'upper contact distance         = ', rcontact
+      call DistFuncHead(nvar, var, uout)
+    write(*,*) '4'
+      call DistFuncWrite(txheading, nvar, var, uout, ulist, ishow, iplot, ilist)
+    write(*,*) '5'
+
+     deallocate(var, ipnt)
+    write(*,*) '6'
+
+   end select
+
+   if (ltime) call CpuAdd('stop', txroutine, 1, uout)
+
+end subroutine ChainBeadInOutTubeCont
 
 
 
