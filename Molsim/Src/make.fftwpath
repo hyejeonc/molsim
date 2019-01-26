@@ -1,0 +1,2 @@
+FFTW_PATH = /home/hyejeonc/molsim/.fftw/include
+FFTWLIB = /home/hyejeonc/molsim/.fftw/lib
